@@ -1,0 +1,190 @@
+<?php
+
+/**
+ * @file
+ * Workspace_plus.
+ */
+
+use Drupal\workspace_plus\EntityOperations;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\workspaces\WorkspaceInterface;
+use Drupal\Core\Session\AccountInterface;
+use Drupal\Core\Access\AccessResult;
+use Drupal\workspaces\FormOperations;
+use Drupal\Core\Entity\EntityFormInterface;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\workspace_plus\UserLoginEvent;
+use Drupal\user\UserInterface;
+
+/**
+ * Implements hook_module_implements_alter().
+ */
+function workspace_plus_module_implements_alter(&$implementations, $hook) {
+
+  if ($hook == 'workspace_access') {
+    // Move module's implementation of hook_page_top to the end of the list.
+    unset($implementations['content_moderation']);
+  }
+
+  if (in_array($hook, ['form_alter',
+    'entity_preload',
+    'entity_presave',
+    'entity_insert',
+    'entity_update',
+    'entity_predelete',
+  ])) {
+    unset($implementations['workspaces']);
+  }
+}
+
+/**
+ * Implements hook_entity_type_alter().
+ */
+function workspace_plus_entity_type_alter(array &$entity_types) {
+  $entity_types['workspace']->setFormClass('deploy', '\Drupal\workspace_plus\Form\WorkspaceDeployForm');
+}
+
+/**
+ * Access funtion callback.
+ */
+function workspace_plus_workspace_access(WorkspaceInterface $workspace, $operation, AccountInterface $account) {
+  if ($operation == 'publish') {
+    return AccessResult::allowed();
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function workspace_plus_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+
+  if ($form_id == 'workflow_state_add_form' || $form_id == 'workflow_state_edit_form') {
+    $config = \Drupal::config('workspace_plus.settings');
+    $current_route = \Drupal::routeMatch();
+    $workflow = $current_route->getParameters()->get('workflow');
+    $settings = $config->get($workflow->id());
+    $form['actions']['submit']['#submit'][] = 'workspace_plus_save_deploy_settings';
+    $form['type_settings']['workspace_deploy'] = [
+      '#type' => 'checkbox',
+      '#title' => t('Deploy to Live'),
+      '#description' => t('Revisions in this state will be deployed to the Live workspace.'),
+      '#weight' => -50,
+      '#default_value' => isset($settings[$form['id']['#default_value']]) ? $settings[$form['id']['#default_value']] : 0,
+    ];
+  }
+
+  if ($form_state->getFormObject() instanceof EntityFormInterface) {
+    \Drupal::service('class_resolver')
+      ->getInstanceFromDefinition(EntityOperations::class)
+      ->entityFormAlter($form, $form_state, $form_id);
+
+    $manager = \Drupal::service('workspace_plus.manager');
+    $entity = $form_state->getFormObject()->getEntity();
+    if ($manager->isEntityTypeSupported($entity->getEntityType())) {
+      $form_state->set('workspace_safe', TRUE);
+    }
+  }
+
+  $form_state->set('workspace_safe', TRUE);
+  if (strpos($form_id, 'layout') < 0) {
+    \Drupal::service('class_resolver')
+      ->getInstanceFromDefinition(FormOperations::class)
+      ->formAlter($form, $form_state, $form_id);
+  }
+
+}
+
+/**
+ * Save settings to deploy content.
+ */
+function workspace_plus_save_deploy_settings($form, FormStateInterface &$form_state) {
+  $values = $form_state->getValues();
+  $config = \Drupal::service('config.factory')->getEditable('workspace_plus.settings');
+  $current_route = \Drupal::routeMatch();
+  $workflow = $current_route->getParameters()->get('workflow');
+  $settings = $config->get($workflow->id());
+  $settings[$values['id']] = $values['type_settings']['workspace_deploy'];
+  $config->set($workflow->id(), $settings)->save();
+}
+
+/**
+ * Implements hook_entity_preload().
+ */
+function workspace_plus_entity_preload(array $ids, $entity_type_id) {
+  return \Drupal::service('class_resolver')
+    ->getInstanceFromDefinition(EntityOperations::class)
+    ->entityPreload($ids, $entity_type_id);
+}
+
+/**
+ * Implements hook_entity_presave().
+ */
+function workspace_plus_entity_presave(EntityInterface $entity) {
+  if ($entity->getEntityTypeId() !== 'file') {
+    return \Drupal::service('class_resolver')
+      ->getInstanceFromDefinition(EntityOperations::class)
+      ->entityPresave($entity);
+  }
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function workspace_plus_entity_insert(EntityInterface $entity) {
+  if ($entity->getEntityTypeId() === 'workspace') {
+    \Drupal::service('workspaces.association')->workspaceInsert($entity);
+    \Drupal::service('workspaces.repository')->resetCache();
+  }
+  if ($entity->getEntityTypeId() !== 'file') {
+    return \Drupal::service('class_resolver')
+      ->getInstanceFromDefinition(EntityOperations::class)
+      ->entityInsert($entity);
+  }
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function workspace_plus_entity_update(EntityInterface $entity) {
+  if ($entity->getEntityTypeId() === 'workspace') {
+    \Drupal::service('workspaces.repository')->resetCache();
+  }
+  if ($entity->getEntityTypeId() !== 'file') {
+    return \Drupal::service('class_resolver')
+      ->getInstanceFromDefinition(EntityOperations::class)
+      ->entityUpdate($entity);
+  }
+}
+
+/**
+ * Implements hook_entity_predelete().
+ */
+function workspace_plus_entity_predelete(EntityInterface $entity) {
+  if ($entity->getEntityTypeId() === 'workspace') {
+    \Drupal::service('workspaces.repository')->resetCache();
+  }
+  if ($entity->getEntityTypeId() !== 'file') {
+    return \Drupal::service('class_resolver')
+      ->getInstanceFromDefinition(EntityOperations::class)
+      ->entityPredelete($entity);
+  }
+}
+
+/**
+ * Implements hook_user_login().
+ */
+function workspace_plus_user_login(UserInterface $account) {
+  $config = \Drupal::config('workspace_plus.settings');
+  $live_workspace_access = empty($config->get('live_workspace_access')) ? ['administrator'] : $config->get('live_workspace_access');
+  $login_user_roles = $account->getRoles();
+  if (!array_intersect($live_workspace_access, $login_user_roles)) {
+    /**
+     * Activate stage workspace.
+     *
+     * @param \Drupal\user\UserInterface $account
+     *   The user object on which the operation was just performed.
+     */
+    $workspace = new UserLoginEvent($account);
+    $workspace->setStageWorkspace();
+  }
+}

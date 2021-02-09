@@ -1,0 +1,186 @@
+<?php
+
+/**
+ * @file
+ * Workspace_plus.
+ */
+
+use Drupal\Core\Field\BaseFieldDefinition;
+
+/**
+ * Implements hook_install().
+ */
+function workspace_plus_install() {
+  // Enable revisions for File and media entities.
+  $batch = [
+    'title' => t('Sleep zzzzz'),
+    'operations' => [
+     ['workspace_plus_enable_revision_batch', ['media']],
+     ['workspace_plus_enable_revision_batch', ['menu_content']],
+    ],
+    'finished' => 'workspace_plus_enable_revision_batch_finished',
+    'init_message' => t('Start to sleep...'),
+    'progress_message' => t('Sleeping...'),
+    'error_message' => t('An error occured while sleeping.'),
+    'file' => drupal_get_path('module', 'workspace_plus') . '/workflow_plus.install',
+  ];
+
+  batch_set($batch);
+
+}
+
+/**
+ * Helps with updating the entity type field definitions.
+ */
+function workspace_plus_enable_revision_batch(&$context, $entity_type_id) {
+  if (!isset($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['max'] = 1;
+  }
+  $context['progress_message'] = $context['sandbox']['progress_message'] = $entity_type_id;
+  $definition_update_manager = \Drupal::entityDefinitionUpdateManager();
+  if ($entity_type = $definition_update_manager->getEntityType($entity_type_id)) {
+    error_log("{$entity_type_id} updating entity keys");
+    $entity_keys = $entity_type->getKeys();
+    $entity_keys['published'] = 'status';
+    $entity_keys['revision'] = 'vid';
+    $entity_type->set('entity_keys', $entity_keys);
+
+    error_log("{$entity_type_id} updating revision_metadata_keys");
+    $revision_metadata_keys = [
+      'revision_user' => 'revision_user',
+      'revision_created' => 'revision_created',
+      'revision_log_message' => 'revision_log_message',
+    ];
+    $entity_type->set('revision_metadata_keys', $revision_metadata_keys);
+
+    \Drupal::service('entity.definition_update_manager')
+      ->updateFieldableEntityType($entity_type, \Drupal::service('entity_field.manager')
+        ->getFieldStorageDefinitions($entity_type_id), $context['sandbox']);
+
+    if (!workspace_plus_entity_type_has_field('status', $entity_type_id)) {
+      error_log("{$entity_type_id} status field add");
+      // Add the Status field.
+      $status = BaseFieldDefinition::create('boolean')
+        ->setLabel(t('Publishing Status'))
+        ->setDescription(t('A boolean indicating the published state.'))
+        ->setRevisionable(TRUE)
+        ->setTranslatable(TRUE)
+        ->setDefaultValue(TRUE);
+
+      $has_content_translation_status_field = \Drupal::moduleHandler()->moduleExists('content_translation') && $definition_update_manager->getFieldStorageDefinition('content_translation_status', $entity_type_id);
+      if ($has_content_translation_status_field) {
+        $status->setInitialValueFromField('content_translation_status');
+      }
+      else {
+        $status->setInitialValue(TRUE);
+      }
+      $definition_update_manager->installFieldStorageDefinition('status', $entity_type_id, $entity_type_id, $status);
+    }
+
+    // Add the revision metadata fields.
+    if (!workspace_plus_entity_type_has_field('revision_created', $entity_type_id)) {
+      error_log("{$entity_type_id} revision_created field add");
+      $revision_created = BaseFieldDefinition::create('created')
+        ->setLabel(t('Revision create time'))
+        ->setDescription(t('The time that the current revision was created.'))
+        ->setRevisionable(TRUE);
+      $definition_update_manager->installFieldStorageDefinition('revision_created', $entity_type_id, $entity_type_id, $revision_created);
+    }
+
+    if (!workspace_plus_entity_type_has_field('revision_user', $entity_type_id)) {
+      error_log("{$entity_type_id} revision_user field add");
+      $revision_user = BaseFieldDefinition::create('entity_reference')
+        ->setLabel(t('Revision user'))
+        ->setDescription(t('The user ID of the author of the current revision.'))
+        ->setSetting('target_type', 'user')
+        ->setRevisionable(TRUE);
+      $definition_update_manager->installFieldStorageDefinition('revision_user', $entity_type_id, $entity_type_id, $revision_user);
+    }
+
+    if (!workspace_plus_entity_type_has_field('revision_log_message', $entity_type_id)) {
+      error_log("{$entity_type_id} revision_log_message field add");
+      $revision_log_message = BaseFieldDefinition::create('string_long')
+        ->setLabel(t('Revision log message'))
+        ->setDescription(t('Briefly describe the changes you have made.'))
+        ->setRevisionable(TRUE)
+        ->setDefaultValue('')
+        ->setDisplayOptions('form', [
+          'type' => 'string_textarea',
+          'weight' => 25,
+          'settings' => [
+            'rows' => 4,
+          ],
+        ]);
+      $definition_update_manager->installFieldStorageDefinition('revision_log_message', $entity_type_id, $entity_type_id, $revision_log_message);
+    }
+
+    // Uninstall the 'content_translation_status' field if needed.
+    error_log("{$entity_type_id} content_translation_status");
+    $database = \Drupal::database();
+    if ($has_content_translation_status_field) {
+      // First we have to remove the field data.
+      $database->update($entity_type->getDataTable())
+        ->fields(['content_translation_status' => NULL])
+        ->execute();
+
+      // A site may have disabled revisionability for this entity type.
+      if ($entity_type->isRevisionable()) {
+        $database->update($entity_type->getRevisionDataTable())
+          ->fields(['content_translation_status' => NULL])
+          ->execute();
+      }
+
+      $content_translation_status = $definition_update_manager
+        ->getFieldStorageDefinition('content_translation_status', $entity_type_id);
+      $definition_update_manager->uninstallFieldStorageDefinition($content_translation_status);
+    }
+  }
+
+  if (empty($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = TRUE;
+  }
+  $context['finished'] = 1;
+}
+
+/**
+ * Batch finish callback.
+ */
+function workspace_plus_enable_revision_batch_finished($success, $results, $operations) {
+  /** @var \Drupal\workspaces\WorkspaceManagerInterface $workspace_manager */
+  if ($success) {
+    $workspace_manager = \Drupal::service('workspace_plus.manager');
+    $entity_definition_update_manager = \Drupal::entityDefinitionUpdateManager();
+    foreach ($entity_definition_update_manager->getEntityTypes() as $entity_type) {
+      $revision_metadata_keys = $entity_type->get('revision_metadata_keys');
+      if ($workspace_manager->isEntityTypeSupported($entity_type)) {
+        try {
+          if (method_exists($entity_type, 'setRevisionMetadataKey')) {
+            $entity_type->setRevisionMetadataKey('workspace', 'workspace');
+            $entity_definition_update_manager->updateEntityType($entity_type);
+          }
+        }
+        catch (\Exception $e) {
+          error_log(print_r($e, TRUE));
+        }
+      }
+    }
+  }
+
+}
+
+/**
+ * Helper function.
+ */
+function workspace_plus_entity_type_has_field($field_name, $entity_type = 'node') {
+  $bundles = \Drupal::service('entity_type.bundle.info')->getBundleInfo($entity_type);
+
+  foreach ($bundles as $bundle => $label) {
+    $all_bundle_fields = \Drupal::service('entity_field.manager')->getFieldDefinitions($entity_type, $bundle);
+    if (isset($all_bundle_fields[$field_name])) {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}

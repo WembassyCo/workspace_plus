@@ -1,0 +1,13 @@
+services:
+  workspace_plus.manager:
+    class: Drupal\workspace_plus\WorkspaceManager
+    arguments: ['@request_stack', '@entity_type.manager', '@entity.memory_cache', '@current_user', '@state', '@logger.channel.workspaces', '@class_resolver', '@workspaces.association']
+    tags:
+      - { name: service_id_collector, tag: workspace_negotiator }
+  workspace_plus.operation_factory:
+    class: Drupal\workspace_plus\WorkspaceOperationFactory
+    arguments: ['@entity_type.manager', '@database', '@workspaces.manager', '@workspaces.association', '@cache_tags.invalidator']
+  workspace_plus.route_subscriber:
+      class: Drupal\workspace_plus\Routing\RouteSubscriber
+      tags:
+        - { name: event_subscriber }

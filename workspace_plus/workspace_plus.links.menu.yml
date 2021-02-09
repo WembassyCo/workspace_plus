@@ -1,0 +1,5 @@
+workspace_plus.admin_settings_form:  
+  title: 'Live Workspace Configuration'  
+  route_name: workspace_plus.settings  
+  description: 'Live Workspace Configuration Settings'  
+  parent: system.admin_config_system

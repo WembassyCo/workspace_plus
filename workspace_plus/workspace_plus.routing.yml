@@ -1,0 +1,7 @@
+workspace_plus.settings:
+  path: '/admin/config/workspace_plus/settings'
+  defaults:
+    _form: '\Drupal\workspace_plus\Form\WorkspacePlusSettingsForm'
+    _title: 'Live Workspace Access'
+  requirements:
+    _permission: 'administer site configuration'

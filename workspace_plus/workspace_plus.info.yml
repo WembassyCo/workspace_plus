@@ -1,0 +1,9 @@
+name: 'Workspace Plus'
+type: module
+description: 'Extends the base functionality of Workspaces to allow for flexible deployments.'
+package: Content Moderation
+core: 8.x
+core_version_requirement: ^8 || ^9
+dependencies:
+  - drupal:workspaces
+  - drupal:content_moderation
