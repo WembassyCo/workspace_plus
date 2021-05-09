@@ -153,7 +153,7 @@ class EntityOperations extends BaseEntityOperations {
       $entity->setUnpublished();
       return $entity;
     }
-    if ($entity->hasField('status')) {
+    else if ($entity->hasField('status')) {
       $entity->set('status', 0);
     }
     return $entity;
@@ -163,12 +163,12 @@ class EntityOperations extends BaseEntityOperations {
    * Helper funciton to unpublish new entity types.
    */
   protected function setPublished(&$entity) {
-    if (method_exists($entity, 'setUnpublished')) {
-      $entity->setUnpublished();
+    if (method_exists($entity, 'setPublished')) {
+      $entity->setPublished();
       return $entity;
     }
-    if ($entity->hasField('status')) {
-      $entity->set('status', 0);
+    else if ($entity->hasField('status')) {
+      $entity->set('status', 1);
     }
     return $entity;
   }
