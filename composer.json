@@ -1,7 +1,7 @@
 {
     "name": "wembassyco/workspace_plus",
     "description": "Extends Drupal Core Workspace module to support additional entities and features.",
-    "type": "project",
+    "type": "drupal-module",
     "license": "GPL-2.0-or-later",
     "authors": [
         {
