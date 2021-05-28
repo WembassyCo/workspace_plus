@@ -132,23 +132,23 @@ function workspace_plus_form_alter(&$form, FormStateInterface $form_state, $form
     }
 
 
-    $form['schedule'] = [
-      '#type' => 'datetime',
-      '#title' => t('Schedule Deployment')
-    ];
-
-    $form['actions']['schedule'] = [
-      '#type' => 'submit',
-      '#value' => t('Schedule %items items to deploy', ['%items' => $total_count]),
-      '#weight' => -50,
-      '#attributes' => [
-        'class' => ['button--primary']
-      ]
-    ];
-
-    $form['actions']['submit']['#value'] = t('Deploy %items items to Live', [
-      '%items' => $total_count
-    ]);
+    // $form['schedule'] = [
+    //   '#type' => 'datetime',
+    //   '#title' => t('Schedule Deployment')
+    // ];
+    //
+    // $form['actions']['schedule'] = [
+    //   '#type' => 'submit',
+    //   '#value' => t('Schedule %items items to deploy', ['%items' => $total_count]),
+    //   '#weight' => -50,
+    //   '#attributes' => [
+    //     'class' => ['button--primary']
+    //   ]
+    // ];
+    //
+    // $form['actions']['submit']['#value'] = t('Deploy %items items to Live', [
+    //   '%items' => $total_count
+    // ]);
   }
 
   // Resolve issue with users seeing workspaces they should not have access to.
