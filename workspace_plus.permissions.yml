@@ -1,0 +1,9 @@
+'view workspace toolbar':
+  title: 'View Workspace Toolbar'
+
+'can edit in live workspace':
+  title: 'Can Edit Live Workspace'
+  restrict_access: true
+
+permission_callbacks:
+  - Drupal\workspace_plus\WorkspacePlusPermissions::permissions

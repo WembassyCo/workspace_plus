@@ -15,6 +15,8 @@ use Drupal\Core\Entity\EntityFormInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\workspace_plus\UserLoginEvent;
 use Drupal\user\UserInterface;
+use Drupal\Core\Url;
+use Drupal\Component\Serialization\Json;
 
 /**
  * Implements hook_module_implements_alter().
@@ -42,6 +44,8 @@ function workspace_plus_module_implements_alter(&$implementations, $hook) {
  */
 function workspace_plus_entity_type_alter(array &$entity_types) {
   $entity_types['workspace']->setFormClass('deploy', '\Drupal\workspace_plus\Form\WorkspaceDeployForm');
+  $entity_types['workspace']->setHandlerClass('access', '\Drupal\workspace_plus\WorkspacePlusAccessControlHandler');
+  $entity_types['workspace']->setHandlerClass('list_builder', '\Drupal\workspace_plus\WorkspacePlusListBuilder');
 }
 
 /**
@@ -92,6 +96,76 @@ function workspace_plus_form_alter(&$form, FormStateInterface $form_state, $form
       ->formAlter($form, $form_state, $form_id);
   }
 
+  // Extend the Deployment form to provide more details about what items are deploying
+
+  if ($form_id == 'workspace_deploy_form') {
+    $service = \Drupal::service('workspaces.operation_factory');
+    $entityTypeManager = \Drupal::entityTypeManager();
+    $entityInfo = \Drupal::entityTypeManager()->getDefinitions();
+
+    $route_match = \Drupal::routeMatch();
+    $route = $route_match->getRouteObject();
+    $parameters = $route->getOption('parameters');
+    $workspace = $route_match->getParameter('workspace');
+    $workspace_publisher = $service->getPublisher($workspace);
+    $source_rev_diff = $workspace_publisher->getDifferringRevisionIdsOnSource();
+    unset($form['deploy']);
+    $total_count = $workspace_publisher->getNumberOfChangesOnSource();
+    $form['deploy'] = [
+      '#type' => 'fieldset',
+      '#total_count' => $total_count
+    ];
+
+    foreach ($source_rev_diff as $entity_type_id => $revision_difference) {
+      if(!isset($form['deploy'][$entity_type_id])) {
+        $form['deploy'][$entity_type_id] = [
+          '#theme' => 'item_list',
+          '#title' => $entityInfo[$entity_type_id]->getLabel(),
+          '#items' => [],
+        ];
+      }
+      foreach($revision_difference as $vid => $nid) {
+        $entity = $entityTypeManager->getStorage($entity_type_id)->load($nid);
+        $form['deploy'][$entity_type_id]['#items'][] = $entity->toLink();
+      }
+
+    }
+
+
+    $form['schedule'] = [
+      '#type' => 'datetime',
+      '#title' => t('Schedule Deployment')
+    ];
+
+    $form['actions']['schedule'] = [
+      '#type' => 'submit',
+      '#value' => t('Schedule %items items to deploy', ['%items' => $total_count]),
+      '#weight' => -50,
+      '#attributes' => [
+        'class' => ['button--primary']
+      ]
+    ];
+
+    $form['actions']['submit']['#value'] = t('Deploy %items items to Live', [
+      '%items' => $total_count
+    ]);
+  }
+
+  // Resolve issue with users seeing workspaces they should not have access to.
+  if ($form_id == 'workspace_switcher_form') {
+
+    $workspaces = $this->workspaceStorage->loadMultiple();
+    $workspace_labels = [];
+    foreach ($workspaces as $workspace) {
+      if ($workspace->hasAccess()) {
+        drupal_set_message('has access');
+        $workspace_labels[$workspace->id()] = $workspace->label();
+      }
+    }
+    $form['workspace_id']['#options'] = $workspace_labels;
+
+  }
+
 }
 
 /**
@@ -125,6 +199,26 @@ function workspace_plus_entity_presave(EntityInterface $entity) {
       ->getInstanceFromDefinition(EntityOperations::class)
       ->entityPresave($entity);
   }
+}
+
+/**
+ * Implements hook_entity_access
+ */
+function workspace_plus_entity_access(EntityInterface $entity, $op, AccountInterface $account) {
+
+  if ($entity->getEntityTypeId() == 'workspace' && ($op == 'view' || $op == 'update')) {
+    // Allow if the user is editing, and allowed to edit or if the user is viewing and
+    // allowed to view.
+
+    $accessResult = AccessResult::allowedIf(
+        $op == 'view' && $account->hasPermission("{$entity->id()} view") ||
+        $op == 'update' && $account->hasPermission("{$entity->id()} edit")
+    );
+
+    return $accessResult;
+  }
+
+  return AccessResult::neutral();
 }
 
 /**
@@ -184,7 +278,73 @@ function workspace_plus_user_login(UserInterface $account) {
      * @param \Drupal\user\UserInterface $account
      *   The user object on which the operation was just performed.
      */
+
     $workspace = new UserLoginEvent($account);
-    $workspace->setStageWorkspace();
+    if ($workspace->hasAccess()) {
+      $workspace->setStageWorkspace();
+    }
   }
+}
+
+
+/**
+ * Implements hook_toolbar().
+ * This is meant to overwrite the core workspace implementation to take into
+ * account more dynamic permissions.
+ */
+function workspace_plus_toolbar() {
+  $items['workspace'] = [
+    '#cache' => [
+      'contexts' => [
+        'user.permissions',
+      ],
+    ],
+  ];
+  $current_user = \Drupal::currentUser();
+  if (!$current_user->hasPermission('administer workspaces')
+    && !$current_user->hasPermission('view own workspace')
+    && !$current_user->hasPermission('view any workspace')
+    && !$current_user->hasPermission('view workspace toolbar') ) {
+    return $items;
+  }
+
+  /** @var \Drupal\workspaces\WorkspaceInterface $active_workspace */
+  $active_workspace = \Drupal::service('workspaces.manager')->getActiveWorkspace();
+
+  $items['workspace'] += [
+    '#type' => 'toolbar_item',
+    'tab' => [
+      '#type' => 'link',
+      '#title' => $active_workspace ? $active_workspace->label() : t('Live'),
+      '#url' => Url::fromRoute('entity.workspace.collection', [], ['query' => \Drupal::destination()->getAsArray()]),
+      '#attributes' => [
+        'title' => t('Switch workspace'),
+        'class' => ['use-ajax', 'toolbar-icon', 'toolbar-icon-workspace'],
+        'data-dialog-type' => 'dialog',
+        'data-dialog-renderer' => 'off_canvas_top',
+        'data-dialog-options' => Json::encode([
+          'height' => 161,
+          'classes' => [
+            'ui-dialog' => 'workspaces-dialog',
+          ],
+        ]),
+      ],
+      '#cache' => ['tags' => $active_workspace ? $active_workspace->getCacheTags() : []],
+    ],
+    '#wrapper_attributes' => [
+      'class' => ['workspaces-toolbar-tab'],
+    ],
+    '#attached' => [
+      'library' => ['workspaces/drupal.workspaces.toolbar'],
+    ],
+    '#weight' => 500,
+  ];
+
+  // Add a special class to the wrapper if we don't have an active workspace so
+  // we can highlight it with a different color.
+  if (!$active_workspace) {
+    $items['workspace']['#wrapper_attributes']['class'][] = 'workspaces-toolbar-tab--is-default';
+  }
+
+  return $items;
 }

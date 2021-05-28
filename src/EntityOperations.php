@@ -8,6 +8,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
 use Drupal\workspaces\EntityOperations as BaseEntityOperations;
 use Drupal\workspaces\WorkspaceManagerInterface;
 use Drupal\workspaces\WorkspaceAssociationInterface;
+use Drupal\Core\Form\FormStateInterface;
 
 /**
  * Defines a class for reacting to entity events.
@@ -207,4 +208,24 @@ class EntityOperations extends BaseEntityOperations {
     }
   }
 
+
+  /**
+   * {@inheritdoc}
+   */
+  public function entityFormAlter(array &$form, FormStateInterface $form_state, $form_id) {
+    $entity = $form_state->getFormObject()->getEntity();
+    if (!$this->workspaceManager->isEntityTypeSupported($entity->getEntityType())) {
+      return;
+    }
+
+    parent::entityFormAlter($form, $form_state, $form_id);
+
+    $account = \Drupal::currentUser();
+
+    if (!$this->workspaceManager->hasActiveWorkspace() && !($account->hasPermission('can edit in live workspace'))) {
+      $form['#markup'] = t('You cannot edit content in the live workspace, use the workspace switcher to make changes.');
+      $form['#access'] = FALSE;
+    }
+
+  }
 }
